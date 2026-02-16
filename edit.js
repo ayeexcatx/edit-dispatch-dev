@@ -6,7 +6,7 @@
   "WMBA": '1pJJx-A139FP1focE6RyGLZyZ1fvheo2t'
 };
 
-  const truckToCompanyMap = {
+const truckToCompanyMap = {
     "DT02": "CCG",
     "RT03": "RTM",
     "RT12": "RTM",
@@ -15,6 +15,8 @@
     "WAJA03": "WAJA",
     'WMBA11': 'WMBA'
     };
+
+const DEV_SPREADSHEET_ID = "1BRkmpO0PoYyDVfK5zskSN9UZjAV9cJpcUd76xXLQHss";
 
 // === HANDLE AMEND OR CANCEL FORM SUBMISSIONS ===
 function onAmendOrCancelFormSubmit(e) {
@@ -66,6 +68,55 @@ function onAmendOrCancelFormSubmit(e) {
   const folderId = companyToFolderId[companyName];
 
   const dispatchFolder = DriveApp.getFolderById("1Fic0PvyH2B-Dq7P0hYQLsn0jB09qOWLE"); // Main dispatch archive folder
+  const devSpreadsheet = SpreadsheetApp.openById(DEV_SPREADSHEET_ID);
+  const dispatchesSheet = devSpreadsheet.getSheetByName("Dispatches");
+  if (!dispatchesSheet) {
+    Logger.log('Dispatches sheet not found in DEV spreadsheet');
+    return;
+  }
+
+  const dispatchesValues = dispatchesSheet.getDataRange().getValues();
+  if (dispatchesValues.length < 2) {
+    Logger.log('Dispatches sheet has no data rows');
+    return;
+  }
+
+  const dispatchesHeaders = dispatchesValues[0];
+  const dispatchesColumnIndex = {};
+  dispatchesHeaders.forEach((header, index) => {
+    dispatchesColumnIndex[String(header).trim()] = index;
+  });
+
+  const dispatchesByDocId = {};
+  const docIdColumnIndex = dispatchesColumnIndex.doc_id;
+  if (docIdColumnIndex === undefined) {
+    Logger.log('Dispatches sheet is missing required doc_id header');
+    return;
+  }
+
+  for (let row = 1; row < dispatchesValues.length; row++) {
+    const docId = dispatchesValues[row][docIdColumnIndex];
+    if (docId) {
+      dispatchesByDocId[String(docId)] = row;
+    }
+  }
+
+  let amendmentHistorySheet = devSpreadsheet.getSheetByName('AmendmentHistory');
+  if (!amendmentHistorySheet) {
+    amendmentHistorySheet = devSpreadsheet.insertSheet('AmendmentHistory');
+  }
+  if (amendmentHistorySheet.getLastRow() === 0) {
+    amendmentHistorySheet.appendRow([
+      'dispatch_id',
+      'truck_number',
+      'event_type',
+      'event_at',
+      'event_by',
+      'reason',
+      'old_doc_id',
+      'new_doc_id'
+    ]);
+  }
 
   for (const truck of truckNumbers) {
   const companyName = truckToCompanyMap[truck];
@@ -121,6 +172,47 @@ function onAmendOrCancelFormSubmit(e) {
      } else {
      Logger.log("Unexpected filename structure: " + targetFile.getName());
       return;  // Stop the script if the filename is unexpected
+    }
+
+    const rowIndex = dispatchesByDocId[targetFile.getId()];
+    if (rowIndex === undefined) {
+      Logger.log('No Dispatches row found for doc_id: ' + targetFile.getId());
+    } else {
+      const updatedRow = dispatchesValues[rowIndex].slice();
+      const now = new Date();
+      const eventBy = Session.getActiveUser().getEmail() || '';
+      const isCancelAction = action.toLowerCase().includes('cancel');
+
+      updatedRow[dispatchesColumnIndex.status] = isCancelAction ? 'Canceled' : 'Amended';
+      updatedRow[dispatchesColumnIndex.doc_id] = amendedFile.getId();
+      updatedRow[dispatchesColumnIndex.doc_url] = amendedFile.getUrl();
+      updatedRow[dispatchesColumnIndex.is_confirmed] = false;
+      updatedRow[dispatchesColumnIndex.last_confirmed_at] = '';
+      updatedRow[dispatchesColumnIndex.last_updated_at] = now;
+      updatedRow[dispatchesColumnIndex.last_updated_by] = eventBy;
+
+      if (isCancelAction) {
+        updatedRow[dispatchesColumnIndex.cancel_reason] = reason;
+        updatedRow[dispatchesColumnIndex.change_summary] = '';
+      } else {
+        updatedRow[dispatchesColumnIndex.change_summary] = reason;
+        updatedRow[dispatchesColumnIndex.cancel_reason] = '';
+      }
+
+      dispatchesSheet
+        .getRange(rowIndex + 1, 1, 1, updatedRow.length)
+        .setValues([updatedRow]);
+
+      amendmentHistorySheet.appendRow([
+        updatedRow[dispatchesColumnIndex.dispatch_id],
+        truck,
+        isCancelAction ? 'CANCEL' : 'AMEND',
+        now,
+        eventBy,
+        reason,
+        targetFile.getId(),
+        amendedFile.getId()
+      ]);
     }
 
     amendedFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW); // Anyone can view
