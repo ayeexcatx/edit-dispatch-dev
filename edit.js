@@ -546,7 +546,7 @@ function updateCompanyDispatchPage(companyName, folderId) {
     .dispatch-block {
       padding: 10px 0;
       border-bottom: 1px solid #e0e0e0;
-      display: flex;
+      display: block;
       justify-content: space-between;
       align-items: center;
       gap: 12px;
@@ -565,9 +565,11 @@ function updateCompanyDispatchPage(companyName, folderId) {
       font-weight: bold; /*Make links bold */
     }
     .confirm-btn {
+      margin-left: 12px;
+      vertical-align: middle;
       border: none;
       border-radius: 4px;
-      padding: 8px 12px;
+      padding: 4px 6px;
       font-size: 14px;
       font-weight: bold;
       cursor: pointer;
