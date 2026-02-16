@@ -419,6 +419,8 @@ function updateCompanyDispatchPage(companyName, folderId) {
   const companyFolder = DriveApp.getFolderById(companyToFolderId[companyName]);
   const truckFolders = folderMap[companyName];
 
+  const dispatchLookup = getDispatchLookupByDocId();
+
   let allFiles = [];
 
   // Aggregate dispatch files from all truck folders within the company folder
@@ -474,7 +476,20 @@ function updateCompanyDispatchPage(companyName, folderId) {
   }
 
   const label = `<span style="${labelStyle}">${labelContent}</span>${statusLabel}`;
-  const link = `<div class="dispatch-block"><a href="${url}">${label}</a></div>`;
+  const dispatchMeta = dispatchLookup[d.file.getId()] || {};
+  const dispatchId = dispatchMeta.dispatch_id;
+  const isConfirmed = dispatchMeta.is_confirmed;
+
+  let confirmControl = "<span class='confirm-placeholder'>[NO DISPATCH ID]</span>";
+  if (dispatchId !== undefined && dispatchId !== null && String(dispatchId).trim() !== "") {
+    if (isConfirmed) {
+      confirmControl = "<button class='confirm-btn confirmed' disabled>Confirmed ✓</button>";
+    } else {
+      confirmControl = `<button class='confirm-btn' data-dispatch-id='${String(dispatchId)}' data-truck-number='${truckNumber}' onclick='confirmReceipt(this)'>Confirm Receipt</button>`;
+    }
+  }
+
+  const link = `<div class="dispatch-block"><a href="${url}">${label}</a>${confirmControl}</div>`;
 
     const entry = { date: d.date, html: link };
 
@@ -531,6 +546,11 @@ function updateCompanyDispatchPage(companyName, folderId) {
     .dispatch-block {
       padding: 10px 0;
       border-bottom: 1px solid #e0e0e0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
     }
     .dispatch-block a {
       text-decoration: none;
@@ -543,6 +563,27 @@ function updateCompanyDispatchPage(companyName, folderId) {
       color: #1a73e8; /* Google Blue */
       text-decoration: underline;
       font-weight: bold; /*Make links bold */
+    }
+    .confirm-btn {
+      border: none;
+      border-radius: 4px;
+      padding: 8px 12px;
+      font-size: 14px;
+      font-weight: bold;
+      cursor: pointer;
+      background-color: #1a73e8;
+      color: #fff;
+    }
+    .confirm-btn.confirmed,
+    .confirm-btn:disabled {
+      background-color: #d9ead3;
+      color: #2e7d32;
+      cursor: default;
+    }
+    .confirm-placeholder {
+      color: #d93025;
+      font-size: 13px;
+      font-weight: bold;
     }
     .title-container {
       text-align: center;
@@ -579,6 +620,31 @@ function updateCompanyDispatchPage(companyName, folderId) {
     <h2>Past</h2>
     ${pastHTML || '<p>No past dispatches.</p>'}
   </div>
+
+  <script>
+    function confirmReceipt(buttonEl) {
+      const dispatchId = buttonEl.getAttribute('data-dispatch-id');
+      const truckNumber = buttonEl.getAttribute('data-truck-number');
+
+      if (!dispatchId) {
+        alert('Missing dispatch ID.');
+        return;
+      }
+
+      buttonEl.disabled = true;
+
+      google.script.run
+        .withSuccessHandler(function() {
+          buttonEl.textContent = 'Confirmed ✓';
+          buttonEl.classList.add('confirmed');
+        })
+        .withFailureHandler(function(error) {
+          buttonEl.disabled = false;
+          alert('Unable to confirm receipt: ' + (error && error.message ? error.message : error));
+        })
+        .confirmDispatchReceipt(dispatchId, truckNumber);
+    }
+  </script>
 </body>
 </html>`;
 
@@ -594,4 +660,44 @@ function updateCompanyDispatchPage(companyName, folderId) {
   }
 
   htmlFile.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+}
+
+function getDispatchLookupByDocId() {
+  const devSpreadsheet = SpreadsheetApp.openById(DEV_SPREADSHEET_ID);
+  const dispatchesSheet = devSpreadsheet.getSheetByName('Dispatches');
+  if (!dispatchesSheet) return {};
+
+  const values = dispatchesSheet.getDataRange().getValues();
+  if (values.length < 2) return {};
+
+  const headers = values[0].map(header => String(header).trim());
+  const columnIndex = {};
+  headers.forEach((header, index) => {
+    columnIndex[header] = index;
+  });
+
+  const docIdIndex = columnIndex.doc_id;
+  const dispatchIdIndex = columnIndex.dispatch_id;
+  const isConfirmedIndex = columnIndex.is_confirmed;
+  if (docIdIndex === undefined || dispatchIdIndex === undefined || isConfirmedIndex === undefined) {
+    return {};
+  }
+
+  const lookup = {};
+  for (let row = 1; row < values.length; row++) {
+    const docId = values[row][docIdIndex];
+    if (!docId) continue;
+
+    const rawConfirmedValue = values[row][isConfirmedIndex];
+    const normalizedConfirmed =
+      rawConfirmedValue === true ||
+      String(rawConfirmedValue).toLowerCase() === 'true';
+
+    lookup[String(docId)] = {
+      dispatch_id: values[row][dispatchIdIndex],
+      is_confirmed: normalizedConfirmed
+    };
+  }
+
+  return lookup;
 }
